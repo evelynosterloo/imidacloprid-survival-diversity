@@ -1,0 +1,322 @@
+---
+title: "Imidacloprid abundance bar graph"
+output: html_document
+date: "2026-03-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+install.packages(c("readxl","tidyverse","stringr"))
+
+library(readxl)
+library(tidyverse)
+library(stringr)
+```
+```{r}
+abund <- read.csv("raw Merged and refined abundance table with taxonomies (ASV)-1.csv")
+```
+
+```{r}
+install.packages("stringr")
+library(stringr)
+```
+
+```{r}
+abund$Family <- str_extract(abund$Taxonomy, "f__[^;]+")
+abund$Family <- gsub("f__", "", abund$Family)
+
+abund$Family[is.na(abund$Family)] <- "Unknown"
+```
+
+```{r}
+unique(abund$Family)[1:10]
+install.packages("phyloseq")
+install.packages("BiocManager")
+BiocManager::install("phyloseq")
+```
+```{r}
+library(phyloseq)
+```
+```{r}
+class(ps)
+```
+
+```{r}
+install.packages(c("readxl","tidyverse"))
+library(readxl)
+library(tidyverse)
+```
+```{r}
+abund <- read.csv("raw Merged and refined abundance table with taxonomies (ASV)-1.csv")
+head(abund)
+```
+
+
+```{r}
+library(tidyverse)
+
+abund$Family <- sapply(strsplit(abund$Taxonomy, "; "), `[`, 5)
+
+abund$Family[is.na(abund$Family)] <- "Unclassified"
+```
+
+```{r}
+abund$Family <- sapply(strsplit(abund$Taxonomy, ";"), function(x) {
+  if(length(x) >= 5) trimws(x[5]) else "Unclassified"
+})
+head(abund$Family)
+```
+```{r}
+unique(abund$Family)[1:10]
+```
+```{r}
+sample_cols <- grep("Abundance", names(abund), value = TRUE)
+```
+
+```{r}
+library(tidyverse)
+
+abund_long <- abund %>%
+  select(Family, all_of(sample_cols)) %>%
+  pivot_longer(-Family,
+               names_to = "Sample",
+               values_to = "Abundance")
+```
+
+```{r}
+abund_long$Sample <- gsub(" Abundance", "", abund_long$Sample)
+```
+
+```{r}
+abund_long <- abund_long %>%
+  mutate(
+    Treatment = case_when(
+      str_detect(Sample, "^C") ~ "Control",
+      str_detect(Sample, "^L") ~ "Low",
+      str_detect(Sample, "^H") ~ "High"
+    )
+  )
+```
+
+```{r}
+family_treatment <- abund_long %>%
+  group_by(Treatment, Family) %>%
+  summarise(TotalAbundance = sum(Abundance), .groups = "drop")
+```
+
+```{r}
+family_treatment <- family_treatment %>%
+  group_by(Treatment) %>%
+  mutate(RelAbundance = TotalAbundance / sum(TotalAbundance))
+```
+
+```{r}
+dominant <- family_treatment %>%
+  group_by(Family) %>%
+  summarise(mean_abund = mean(RelAbundance)) %>%
+  filter(mean_abund > 0.02)
+
+plot_data <- family_treatment %>%
+  filter(Family %in% dominant$Family)
+```
+
+```{r}
+ggplot(plot_data, aes(x = Treatment, y = RelAbundance, fill = Family)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Treatment Group",
+    y = "Relative Abundance (%)",
+    fill = "Bacterial Family",
+    title = "Dominant Bacterial Families Across Treatments"
+  ) +
+  theme_classic() +
+  theme(
+    text = element_text(size = 14),
+    axis.text.x = element_text(face = "bold")
+  )
+```
+
+```{r}
+library(tidyverse)
+abund_long <- abund %>%
+  pivot_longer(
+    cols = ends_with(".Abundance"),
+    names_to = "Sample",
+    values_to = "Abundance")
+```
+
+```{r}
+abund_long <- abund_long %>%
+  mutate(
+    Treatment = case_when(
+      str_starts(Sample, "C") ~ "Control",
+      str_starts(Sample, "L") ~ "Low",
+      str_starts(Sample, "H") ~ "High"
+    ),
+    
+    Time = case_when(
+      str_detect(Sample, "F") ~ "Final",
+      str_detect(Sample, "M") ~ "Middle",
+      TRUE ~ "Initial"
+    )
+  )
+```
+
+```{r}
+abund_long$Group_Time <- paste(abund_long$Treatment, abund_long$Time)
+```
+
+```{r}
+top_families <- abund_long %>%
+  group_by(Family) %>%
+  summarise(total = sum(Abundance)) %>%
+  arrange(desc(total)) %>%
+  slice(1:10) %>%
+  pull(Family)
+  
+```
+
+```{r}
+abund_long$Family <- ifelse(
+  abund_long$Family %in% top_families,
+  abund_long$Family,
+  "Other"
+)
+```
+
+```{r}
+plot_data <- abund_long %>%
+  group_by(Group_Time, Family) %>%
+  summarise(Abundance = sum(Abundance), .groups = "drop") %>%
+  group_by(Group_Time) %>%
+  mutate(RelAbundance = Abundance / sum(Abundance))
+```
+
+
+```{r}
+family_order <- plot_data %>%
+  group_by(Family) %>%
+  summarise(total = sum(RelAbundance)) %>%
+  arrange(desc(total)) %>%
+  pull(Family)
+
+plot_data$Family <- factor(plot_data$Family, levels = family_order)
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(plot_data, aes(x = Group_Time, y = RelAbundance, fill = Family)) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Treatment and Timepoint",
+    y = "Relative Abundance (%)",
+    fill = "Bacterial Family"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    text = element_text(size = 14)
+  )
+```
+
+```{r}
+plot_data$Family <- gsub("_.*", "", plot_data$Family)
+```
+
+```{r}
+plot_data$Group_Time <- factor(
+  plot_data$Group_Time,
+  levels = c(
+    "Control Initial",
+    "Control Middle",
+    "Control Final",
+    "Low Initial",
+    "Low Middle",
+    "Low Final",
+    "High Initial",
+    "High Middle",
+    "High Final"
+  )
+)
+```
+
+`
+
+```{r}
+plot_data <- plot_data %>%
+  tidyr::separate(Group_Time, into = c("Treatment", "Time"), sep = " ")
+```
+
+```{r}
+plot_data$Time <- factor(
+  plot_data$Time,
+  levels = c("Initial", "Middle", "Final")
+)
+```
+
+```{r}
+family_order <- plot_data %>%
+  group_by(Family) %>%
+  summarise(total = sum(RelAbundance)) %>%
+  arrange(desc(total)) %>%
+  pull(Family)
+
+plot_data$Family <- factor(plot_data$Family, levels = family_order)
+```
+
+
+
+
+```{r}
+plot_data$Family <- factor(plot_data$Family, levels = rev(family_order))
+```
+
+```{r}
+ggplot(plot_data, aes(x = Time, y = RelAbundance, fill = Family)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Treatment) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Timepoint",
+    y = "Relative Abundance (%)",
+    fill = "Bacterial Family"
+  ) +
+  theme_classic() +
+  theme(
+    strip.text = element_text(size = 14, face = "bold"),
+    text = element_text(size = 14),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+```{r}
+install.packages("viridis")
+library(viridis)
+```
+```{r}
+scale_fill_viridis_d(option = "turbo")
+```
+```{r}
+ggplot(plot_data, aes(x = Time, y = RelAbundance, fill = Family)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~Treatment) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_viridis_d(option = "turbo") +
+  labs(
+    x = "Timepoint",
+    y = "Relative Abundance (%)",
+    fill = "Bacterial Family"
+  ) +
+  theme_classic() +
+  theme(
+    strip.text = element_text(size = 14, face = "bold"),
+    text = element_text(size = 14),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+

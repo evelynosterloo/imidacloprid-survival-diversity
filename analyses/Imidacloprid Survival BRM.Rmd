@@ -1,0 +1,380 @@
+---
+title: "Imidacloprid BRM"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+date: "2025-08-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Load the libraries
+library(tidyverse)
+library(tidybayes)
+library(ggplot2)
+library(brms)
+```
+```{r}
+imidacloprid.survival <- read.csv("Imidacloprid.survival2.csv")
+str(imidacloprid.survival)
+imidacloprid.survival <- imidacloprid.survival %>%
+  mutate(DOSE = factor(DOSE, levels = c("control", "low", "high")))
+```
+```{r}
+bayes_surv_model <- brm(
+  formula = SURVIVAL | cens(1 - STATUS) ~ DOSE,
+  family = weibull(),
+  data = imidacloprid.survival,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 1000,
+  seed = 123,
+  control = list(adapt_delta = 0.95))
+```
+
+```{r}
+summary(bayes_surv_model)
+plot(bayes_surv_model)
+```
+```{r}
+# Get posterior draws
+posterior <- posterior_samples(bayes_surv_model)
+
+# Or using tidybayes
+bayes_surv_model %>%
+  spread_draws(b_Intercept) %>%
+  median_qi()
+bayes_surv_model %>%
+  spread_draws(b_DOSElow) %>%
+  median_qi()
+
+bayes_surv_model %>%
+  spread_draws(b_DOSEhigh) %>%
+  median_qi()
+```
+```{r}
+posterior_survival <- posterior_predict(bayes_surv_model, 
+                                       newdata = data.frame(DOSE = c("control", "low", "high")),
+                                       re_formula = NULL)
+```
+
+
+```{r}
+# Fit a brms model (for example)
+fit <- brm(SURVIVAL ~ DOSE + (1|ID), data = imidacloprid.survival)
+```
+
+
+```{r}
+ls()  # Lists all objects in your R environment
+```
+
+```{r}
+# Extract posterior samples for each treatment group
+posterior_samples <- as.data.frame(fit)
+
+# Extract shape and scale parameters for each treatment group (adjust variable names if necessary)
+control_shape_param <- posterior_samples$b_grouplow   # Replace 'b_grouplow' with actual variable for control
+control_scale_param <- posterior_samples$sigma         # Replace 'sigma' with the scale parameter
+
+# If you have 'low' and 'high' dose groups, extract them similarly:
+low_shape_param <- posterior_samples$b_grouplow
+low_scale_param <- posterior_samples$sigma
+
+high_shape_param <- posterior_samples$b_grouphigh
+high_scale_param <- posterior_samples$sigma
+```
+
+
+```{r}
+names(as_draws_df(fit))
+```
+
+```{r}
+fit_weib <- brm(
+  SURVIVAL | cens(1 - STATUS) ~ DOSE, 
+  data = imidacloprid.survival,
+  family = weibull(),
+  chains = 4, iter = 8000, warmup = 2000, cores = 4,
+  control = list(adapt_delta = 0.999, max_treedepth = 15),
+  seed = 123)
+```
+
+```{r}
+post <- as_draws_df(fit_weib)  # replace fit_weib with your model name
+names(post)  # check column names to confirm
+```
+```{r}
+# Shape is the same for all groups unless modeled as varying
+shape_param <- post$shape
+
+# Scale = exp(Intercept + effect)
+scale_control <- exp(post$b_Intercept)
+scale_low     <- exp(post$b_Intercept + post$b_DOSElow)
+scale_high    <- exp(post$b_Intercept + post$b_DOSEhigh)
+```
+
+```{r}
+scale_control
+```
+
+
+```{r}
+time_vector <- seq(0, 21, by = 1)  # days in your experiment
+num_draws <- length(shape_param)
+
+# Empty matrices: rows = posterior draws, cols = time points
+control_survival <- matrix(NA, nrow = num_draws, ncol = length(time_vector))
+low_survival     <- control_survival
+high_survival    <- control_survival
+
+# Loop over posterior draws
+for (i in 1:num_draws) {
+  control_survival[i, ] <- exp(-(time_vector / scale_control[i]) ^ shape_param[i])
+  low_survival[i, ]     <- exp(-(time_vector / scale_low[i])     ^ shape_param[i])
+  high_survival[i, ]    <- exp(-(time_vector / scale_high[i])    ^ shape_param[i])
+}
+```
+
+```{r}
+# Mean survival curve
+mean_control <- colMeans(control_survival)
+mean_low     <- colMeans(low_survival)
+mean_high    <- colMeans(high_survival)
+
+# 95% credible intervals
+ci_control <- apply(control_survival, 2, quantile, probs = c(0.025, 0.975))
+ci_low     <- apply(low_survival,     2, quantile, probs = c(0.025, 0.975))
+ci_high    <- apply(high_survival,    2, quantile, probs = c(0.025, 0.975))
+```
+
+```{r}
+mean_control
+mean_low
+mean_high
+```
+```{r}
+ci_control
+ci_low  
+ci_high
+```
+
+```{r}
+library(ggplot2)
+
+plot_df <- data.frame(
+  time = rep(time_vector, 3),
+  mean_surv = c(mean_control, mean_low, mean_high),
+  lower = c(ci_control[1,], ci_low[1,], ci_high[1,]),
+  upper = c(ci_control[2,], ci_low[2,], ci_high[2,]),
+  group = rep(c("Control", "Low", "High"), each = length(time_vector))
+)
+
+ggplot(plot_df, aes(x = time, y = mean_surv, color = group, fill = group)) +
+  geom_line(linewidth = 1.2) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  labs(x = "Days", y = "Survival Probability") +
+  theme_minimal()
+```
+```{r}
+library(posterior)
+
+# Convert model draws to a data frame
+post <- as_draws_df(bayes_surv_model)
+
+# Find empty or zero-length names
+bad_cols <- which(names(post) == "" | is.na(names(post)))
+
+if(length(bad_cols) > 0){
+  names(post)[bad_cols] <- paste0("unnamed_col_", bad_cols)
+}
+
+# Now run your HR calculations with cleaned names:
+b_low <- post$b_DOSElow
+b_high <- post$b_DOSEhigh
+shape <- post$shape
+
+HR_low <- exp(-b_low * shape)
+HR_high <- exp(-b_high * shape)
+HR_high_vs_low <- HR_high / HR_low
+
+summary_df <- tibble::tibble(
+  comparison = c("Low vs Control", "High vs Control", "High vs Low"),
+  median = c(median(HR_low), median(HR_high), median(HR_high_vs_low)),
+  lower = c(quantile(HR_low, 0.025), quantile(HR_high, 0.025), quantile(HR_high_vs_low, 0.025)),
+  upper = c(quantile(HR_low, 0.975), quantile(HR_high, 0.975), quantile(HR_high_vs_low, 0.975))
+)
+print(summary_df)
+```
+
+```{r}
+library(tibble)
+library(ggplot2)
+library(dplyr)
+
+# Your hazard ratio summary data
+summary_df <- tibble(
+  comparison = c("Low vs Control", "High vs Control", "High vs Low"),
+  median = c(63.56, 6.62, 0.11),
+  lower = c(3.65, 0.83, 0.0093),
+  upper = c(3787.67, 193.29, 0.88)
+)
+```
+
+```{r}
+ggplot(summary_df, aes(x = comparison, y = median)) +
+  geom_point(size = 3, color = "darkblue") +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.15, color = "darkblue") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  scale_y_log10() +  # log scale to better visualize large range of HRs
+  labs(
+    title = "Hazard Ratios for Frog Survival by Dose Group",
+    x = "Comparison",
+    y = "Hazard Ratio (log scale)",
+    caption = "Red dashed line = HR = 1 (no effect)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 25, hjust = 1, size = 12),
+    axis.title = element_text(size = 13),
+    plot.title = element_text(face = "bold", size = 16),
+    plot.caption = element_text(face = "italic")
+  )
+```
+
+```{r}
+library(knitr)
+library(kableExtra)
+```
+
+```{r}
+library(knitr)
+library(kableExtra)
+
+summary_df %>%
+  mutate(
+    median = round(median, 2),
+    lower = signif(lower, 3),
+    upper = signif(upper, 3),
+    `95% CI` = paste0("[", lower, ", ", upper, "]")
+  ) %>%
+  select(comparison, median, `95% CI`) %>%
+  kable(
+    caption = "Summary of Hazard Ratios with 95% Credible Intervals",
+    col.names = c("Comparison", "Median HR", "95% Credible Interval"),
+    align = c("l", "r", "l")
+  ) %>%
+  kable_styling(
+    full_width = FALSE, 
+    position = "center", 
+    bootstrap_options = c("striped", "hover")
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(2:3, bold = TRUE)
+```
+
+```{r}
+ggplot(plot_df, aes(x = time, y = mean_surv, color = group, fill = group)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.25, color = NA) +
+  geom_line(linewidth = 1.3) +
+  scale_color_manual(values = c("Control" = "#d73027", 
+                                 "Low" = "#4575b4", 
+                                 "High" = "#1a9850")) +
+  scale_fill_manual(values = c("Control" = "#d73027", 
+                                "Low" = "#4575b4", 
+                                "High" = "#1a9850")) +
+  labs(x = "Days", y = "Survival Probability", color = "Group", fill = "Group") +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+library(tidyverse)
+library(tidybayes)
+library(knitr)
+library(kableExtra)
+
+# Extract posterior draws
+post <- as_draws_df(bayes_surv_model)
+
+# Shape and scale for each group
+shape <- post$shape
+scale_control <- exp(post$b_Intercept)
+scale_low     <- exp(post$b_Intercept + post$b_DOSElow)
+scale_high    <- exp(post$b_Intercept + post$b_DOSEhigh)
+
+# Function: Restricted Mean Survival Time for Weibull
+rmst_weibull <- function(tmax, scale, shape) {
+  scale / shape * gamma_inc(1/shape, (tmax / scale)^shape)
+}
+
+# Incomplete gamma function wrapper
+gamma_inc <- function(a, x) {
+  gamma(a) * pgamma(x, shape = a, lower.tail = TRUE)
+}
+
+# Maximum follow-up time (21 days)
+tmax <- 21
+
+# Compute RMST for each posterior draw
+rmst_control <- rmst_weibull(tmax, scale_control, shape)
+rmst_low     <- rmst_weibull(tmax, scale_low, shape)
+rmst_high    <- rmst_weibull(tmax, scale_high, shape)
+
+# Combine into tidy data
+rmst_df <- tibble(
+  Group = rep(c("Control", "Low", "High"), each = length(rmst_control)),
+  RMST = c(rmst_control, rmst_low, rmst_high)
+)
+
+# Summarize posterior
+summary_table <- rmst_df %>%
+  group_by(Group) %>%
+  median_qi(RMST, .width = 0.95) %>%
+  rename(
+    Mean = RMST,
+    Lower95 = .lower,
+    Upper95 = .upper
+  ) %>%
+  mutate(
+    Mean = round(Mean, 2),
+    Lower95 = round(Lower95, 2),
+    Upper95 = round(Upper95, 2)
+  ) %>%
+  select(Group, Mean, Lower95, Upper95)
+
+# Print styled kable table
+summary_table %>%
+  kable("html", caption = "Posterior Restricted Mean Survival Time (days) with 95% Credible Intervals",
+        col.names = c("Group", "Mean", "Lower 95%", "Upper 95%")) %>%
+  kable_styling(full_width = FALSE, position = "center", bootstrap_options = c("striped", "hover")) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(2:4, bold = TRUE)
+```
+```{r}
+library(ggplot2)
+
+# Posterior distribution plot for RMST
+ggplot(rmst_df, aes(x = RMST, y = Group, fill = Group)) +
+  stat_halfeye(.width = 0.95, point_interval = median_qi, 
+               slab_alpha = 0.6, fatten_point = 2) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Posterior RMST (days) with 95% Credible Intervals",
+    x = "Restricted Mean Survival Time (days)",
+    y = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+

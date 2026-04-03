@@ -1,0 +1,165 @@
+---
+title: "Imidacloprid alpha diversity"
+output:
+  word_document: default
+  html_document: default
+date: "2026-02-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+df <- read.csv("frog_microbiome_counts.csv", check.names = FALSE)
+dim(df)
+head(df[,1:10])
+counts <- df %>%
+  select(ends_with("Abundance"))
+colnames(counts) <- str_remove(colnames(counts), " Abundance")
+```
+
+```{r}
+counts_t <- as.data.frame(t(counts))
+colnames(counts_t) <- df$ID
+counts_t$SampleID <- rownames(counts_t)
+counts_t <- counts_t %>%
+  select(SampleID, everything())
+```
+
+```{r}
+count_matrix <- counts_t %>%
+  select(-SampleID)
+shannon <- diversity(count_matrix, index = "shannon")
+richness <- specnumber(count_matrix)
+counts_t$Shannon <- shannon
+counts_t$Richness <- richness
+```
+
+
+```{r}
+counts_t <- counts_t %>%
+  mutate(
+    FrogID = str_extract(SampleID, "[A-Z][0-9]"),
+    Treatment = case_when(
+      str_starts(SampleID, "C") ~ "Control",
+      str_starts(SampleID, "L") ~ "Low",
+      str_starts(SampleID, "H") ~ "High"
+    ),
+    Time = case_when(
+      str_detect(SampleID, "M") ~ "Mid",
+      str_detect(SampleID, "F") ~ "Final",
+      TRUE ~ "Baseline"
+    )
+  )
+counts_t$Treatment <- factor(counts_t$Treatment)
+counts_t$Time <- factor(counts_t$Time, 
+                        levels = c("Baseline", "Mid", "Final"))
+counts_t$FrogID <- factor(counts_t$FrogID)
+```
+
+```{r}
+model <- lmer(Shannon ~ Treatment * Time + (1 | FrogID), 
+              data = counts_t)
+
+summary(model)
+anova(model)
+```
+
+```{r}
+ ggplot(counts_t, aes(Time, Shannon, color = Treatment)) +
+  geom_point(size = 3) +
+  geom_line(aes(group = FrogID), alpha = 0.3) +
+  stat_summary(aes(group = Treatment), fun = mean, 
+               geom = "line", size = 1.5) +
+  theme_classic()
+```
+
+```{r}
+sample_sums <- rowSums(count_matrix)
+summary(sample_sums)
+```
+```{r}
+range(count_matrix)
+head(count_matrix[,1:5])
+summary(rowSums(count_matrix))
+```
+
+```{r}
+summary(rowSums(count_matrix))
+
+```
+
+```{r}
+relative_abundance <- count_matrix / rowSums(count_matrix)
+
+counts_t$Shannon <- diversity(relative_abundance, index = "shannon")
+```
+
+```{r}
+summary(counts_t$Shannon)
+```
+
+```{r}
+model <- lmer(Shannon ~ Treatment * Time + (1 | FrogID), data = counts_t)
+
+summary(model)
+anova(model)
+```
+```{r}
+ggplot(counts_t, aes(Time, Shannon, color = Treatment)) +
+  geom_point(size = 3) +
+  geom_line(aes(group = FrogID), alpha = 0.3) +
+  stat_summary(aes(group = Treatment), fun = mean, 
+               geom = "line", size = 1.5) +
+  theme_classic()
+```
+
+```{r}
+install.packages("broom.mixed")
+library(broom.mixed)
+```
+```{r}
+model_table <- tidy(model, effects = "fixed", conf.int = TRUE)
+
+model_table
+library(knitr)
+kable(model_table, digits = 3)
+install.packages("flextable")
+library(flextable)
+
+ft <- flextable(model_table)
+ft <- autofit(ft)
+
+save_as_docx(ft, path = "Mixed_Model_Shannon_Table.docx")
+```
+```{r}
+model_table_clean <- model_table %>%
+  select(term, estimate, std.error, conf.low, conf.high, p.value) %>%
+  rename(
+    Term = term,
+    Estimate = estimate,
+    SE = std.error,
+    CI_Lower = conf.low,
+    CI_Upper = conf.high,
+    p_value = p.value
+  ) %>%
+  mutate(
+    Estimate = round(Estimate, 2),
+    SE = round(SE, 2),
+    CI_Lower = round(CI_Lower, 2),
+    CI_Upper = round(CI_Upper, 2),
+    p_value = ifelse(p_value < 0.001,
+                     "<0.001",
+                     format(round(p_value, 3), nsmall = 3))
+  )
+```
+
+```{r}
+write.csv(model_table_clean,
+          "Mixed_Model_Shannon_Rounded.csv",
+          row.names = FALSE)
+```
+
+
+

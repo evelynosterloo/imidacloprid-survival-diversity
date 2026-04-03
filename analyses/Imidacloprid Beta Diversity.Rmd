@@ -1,0 +1,277 @@
+---
+title: "Imidacloprid Beta diversity (Bray Curtis)"
+output: html_document
+date: "2026-03-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+install.packages("ape")
+library(vegan)
+library(ape)
+library(ggplot2)
+library(dplyr)
+```
+```{r}
+bray_dist <- vegdist(count_matrix, method = "bray")
+pcoa_res <- pcoa(bray_dist)
+pcoa_df <- as.data.frame(pcoa_res$vectors)
+
+```
+```{r}
+# Get sample names
+sample_ids <- rownames(count_matrix)
+
+# Create metadata dataframe
+meta <- data.frame(SampleID = sample_ids)
+
+# Extract Time
+meta$Time <- ifelse(grepl("M$", sample_ids), "Mid",
+             ifelse(grepl("F$", sample_ids), "Final", "Initial"))
+
+# Extract FrogID (remove M or F at end)
+meta$FrogID <- gsub("M$|F$", "", sample_ids)
+
+# Extract Treatment based on first letter
+meta$Treatment <- ifelse(grepl("^C", meta$FrogID), "Control",
+                  ifelse(grepl("^L", meta$FrogID), "Low", "High"))
+
+# Convert to factors
+meta$Treatment <- factor(meta$Treatment)
+meta$Time <- factor(meta$Time, levels = c("Initial","Mid","Final"))
+
+head(meta)
+```
+
+
+```{r}
+pcoa_df$SampleID <- rownames(pcoa_df)
+
+pcoa_df <- merge(pcoa_df, meta, by = "SampleID")
+nrow(meta)
+```
+```{r}
+table(meta$FrogID)
+```
+```{r}
+meta[meta$FrogID == "L3", ]
+length(unique(meta$SampleID))
+rownames(count_matrix)
+```
+```{r}
+count_matrix <- count_matrix[rownames(count_matrix) != "Combined", ]
+nrow(count_matrix)
+```
+```{r}
+sample_ids <- rownames(count_matrix)
+
+meta <- data.frame(SampleID = sample_ids)
+
+meta$Time <- ifelse(grepl("M$", sample_ids), "Mid",
+             ifelse(grepl("F$", sample_ids), "Final", "Initial"))
+
+meta$FrogID <- gsub("M$|F$", "", sample_ids)
+
+meta$Treatment <- ifelse(grepl("^C", meta$FrogID), "Control",
+                  ifelse(grepl("^L", meta$FrogID), "Low", "High"))
+
+meta$Treatment <- factor(meta$Treatment)
+meta$Time <- factor(meta$Time, levels = c("Initial","Mid","Final"))
+
+nrow(meta)
+```
+```{r}
+bray_dist <- vegdist(count_matrix, method = "bray")
+pcoa_res <- cmdscale(bray_dist, k = 2, eig = TRUE)
+```
+
+```{r}
+library(ggplot2)
+
+# Extract coordinates
+pcoa_df <- as.data.frame(pcoa_res$points)
+colnames(pcoa_df) <- c("Axis1", "Axis2")
+
+# Add sample IDs
+pcoa_df$SampleID <- rownames(pcoa_df)
+
+# Merge metadata
+pcoa_df <- merge(pcoa_df, meta, by = "SampleID")
+```
+
+```{r}
+percent_var <- round(100 * pcoa_res$eig / sum(pcoa_res$eig), 1)
+```
+
+```{r}
+ggplot(pcoa_df, aes(x = Axis1, y = Axis2, 
+                    color = Treatment, 
+                    shape = Time)) +
+  geom_point(size = 4) +
+  theme_classic() +
+  labs(
+    x = paste0("PCoA 1 (", percent_var[1], "%)"),
+    y = paste0("PCoA 2 (", percent_var[2], "%)")
+  ) +
+  theme(
+    text = element_text(size = 14),
+    legend.position = "right"
+  )
+```
+
+```{r}
+ggplot(pcoa_df, aes(x = Axis1, y = Axis2, 
+                    color = Treatment)) +
+  geom_point(size = 4) +
+  
+  facet_wrap(~ Time) +
+  theme_classic() +
+  labs(
+    x = paste0("PCoA 1 (", percent_var[1], "%)"),
+    y = paste0("PCoA 2 (", percent_var[2], "%)")
+  ) +
+  theme(
+    text = element_text(size = 14)
+  )
+```
+
+```{r}
+all(rownames(count_matrix) == meta$SampleID)
+```
+
+```{r}
+adonis2(bray_dist ~ Time, data = meta, permutations = 999)
+```
+```{r}
+adonis2(bray_dist ~ Treatment, data = meta, permutations = 999)
+```
+```{r}
+anova(betadisper(bray_dist, meta$Time))
+anova(betadisper(bray_dist, meta$Treatment))
+```
+```{r}
+set.seed(123)
+
+adonis2(
+  bray_dist ~ meta$Time,
+  permutations = 999
+)
+```
+
+```{r}
+adonis2(
+  bray_dist ~ meta$Treatment,
+  permutations = 999
+)
+```
+```{r}
+anova(betadisper(bray_dist, meta$Time))
+anova(betadisper(bray_dist, meta$Treatment))
+```
+
+```{r}
+adonis_treatment <- adonis2(bray_dist ~ Treatment, 
+                            data = meta, 
+                            permutations = 999)
+
+adonis_time <- adonis2(bray_dist ~ Time, 
+                       data = meta, 
+                       permutations = 999)
+```
+
+```{r}
+library(dplyr)
+library(tibble)
+
+# Treatment
+treat_table <- as.data.frame(adonis_treatment) %>%
+  rownames_to_column("Effect") %>%
+  filter(Effect == "Model") %>%
+  mutate(
+    Effect = "Treatment",
+    R2 = round(R2, 3),
+    F = round(F, 3),
+    `p-value` = `Pr(>F)`
+  ) %>%
+  select(Effect, Df, R2, F, `p-value`)
+
+# Time
+time_table <- as.data.frame(adonis_time) %>%
+  rownames_to_column("Effect") %>%
+  filter(Effect == "Model") %>%
+  mutate(
+    Effect = "Time",
+    R2 = round(R2, 3),
+    F = round(F, 3),
+    `p-value` = `Pr(>F)`
+  ) %>%
+  select(Effect, Df, R2, F, `p-value`)
+
+# Combine
+permanova_table <- bind_rows(treat_table, time_table)
+
+permanova_table
+```
+```{r}
+library(dplyr)
+library(tibble)
+library(flextable)
+library(officer)
+
+# Extract Treatment
+treat_table <- as.data.frame(adonis_treatment) %>%
+  rownames_to_column("Effect") %>%
+  filter(Effect == "Model") %>%
+  mutate(
+    Effect = "Treatment",
+    R2 = round(R2, 3),
+    F = round(F, 2),
+    `p-value` = round(`Pr(>F)`, 3)
+  ) %>%
+  select(Effect, Df, R2, F, `p-value`)
+
+# Extract Time
+time_table <- as.data.frame(adonis_time) %>%
+  rownames_to_column("Effect") %>%
+  filter(Effect == "Model") %>%
+  mutate(
+    Effect = "Time",
+    R2 = round(R2, 3),
+    F = round(F, 2),
+    `p-value` = round(`Pr(>F)`, 3)
+  ) %>%
+  select(Effect, Df, R2, F, `p-value`)
+
+# Combine
+permanova_table <- bind_rows(treat_table, time_table)
+
+# Add significance stars
+permanova_table <- permanova_table %>%
+  mutate(
+    Significance = case_when(
+      `p-value` < 0.001 ~ "***",
+      `p-value` < 0.01  ~ "**",
+      `p-value` < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+# Create flextable
+ft <- flextable(permanova_table) %>%
+  set_caption("Table X. PERMANOVA results testing effects of Treatment and Time on Bray–Curtis beta diversity.") %>%
+  theme_booktabs() %>%
+  autofit()
+
+# Bold significant p-values
+ft <- bold(ft, i = ~ `p-value` < 0.05, j = "p-value", bold = TRUE)
+
+# Export to Word
+doc <- read_docx() %>%
+  body_add_flextable(ft)
+
+print(doc, target = "PERMANOVA_Table.docx")
+```
+
